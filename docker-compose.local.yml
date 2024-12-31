@@ -8,10 +8,6 @@ services:
       - "${SERVER_PORT}:${SERVER_PORT}"
     environment:
       STORAGE_TYPE: "local"
-      MINIO_ENDPOINT: "${MINIO_ENDPOINT}"
-      MINIO_ROOT_USER: "${MINIO_ROOT_USER}"
-      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD}"
-      BUCKET_NAME: "${BUCKET_NAME}"
       SERVER_PORT: "${SERVER_PORT}"
     volumes:
       - "${LOCAL_STORAGE_PATH}:/data"
