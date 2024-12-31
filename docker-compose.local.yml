@@ -11,3 +11,4 @@ services:
       SERVER_PORT: "${SERVER_PORT}"
     volumes:
       - "${LOCAL_STORAGE_PATH}:/data"
+    pull_policy: build
