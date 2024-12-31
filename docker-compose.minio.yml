@@ -1,0 +1,36 @@
+services:
+  minio:
+    image: minio/minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      STORAGE_TYPE: "minio"
+      MINIO_ENDPOINT: "${MINIO_ENDPOINT}"
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER}"
+      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD}"
+      BUCKET_NAME: "${BUCKET_NAME}"
+      SERVER_PORT: "${SERVER_PORT}"
+    command: minio server --console-address ":9001" /data
+    volumes:
+      - minio_data:/data
+
+
+  cdn:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${SERVER_PORT}:${SERVER_PORT}"
+    environment:
+      STORAGE_TYPE: "minio"
+      MINIO_ENDPOINT: "${MINIO_ENDPOINT}"
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER}"
+      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD}"
+      BUCKET_NAME: "${BUCKET_NAME}"
+      SERVER_PORT: "${SERVER_PORT}"
+    depends_on:
+      - minio
+
+volumes:
+  minio_data:
