@@ -6,16 +6,13 @@ services:
       - "9001:9001"
     container_name: dayquest-cdn
     environment:
-      STORAGE_TYPE: "minio"
-      MINIO_ENDPOINT: "${MINIO_ENDPOINT}"
       MINIO_ROOT_USER: "${MINIO_ROOT_USER}"
       MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD}"
-      BUCKET_NAME: "${BUCKET_NAME}"
-      SERVER_PORT: "${SERVER_PORT}"
     command: minio server --console-address ":9001" /data
     volumes:
       - minio_data:/data
-
+    networks:
+      - dayquest-network
 
   cdn:
     build:
@@ -33,6 +30,15 @@ services:
     depends_on:
       - minio
     pull_policy: build
+    networks:
+      - dayquest-network
+
 
 volumes:
   minio_data:
+
+networks:
+  dayquest-network:
+    name: dayquest-network
+    external: true
+    driver: bridge
