@@ -44,12 +44,12 @@ func NewVideoHandler(storage storage.Storage, cfg *config.Config) *VideoHandler 
         config:  cfg,
     }
 }
-
 func (h *VideoHandler) StreamVideo(w http.ResponseWriter, r *http.Request) {
     ctx := r.Context()
     videoName := mux.Vars(r)["video"]
 
-    obj, err := h.storage.StatObject(ctx, videoName)
+
+    obj, err := h.storage.StatVideo(ctx, videoName)
     if err != nil {
         http.Error(w, "Video not found", http.StatusNotFound)
         return
@@ -57,7 +57,7 @@ func (h *VideoHandler) StreamVideo(w http.ResponseWriter, r *http.Request) {
 
     start, end := parseRangeHeader(r, obj.Size)
 
-    reader, err := h.storage.GetObject(ctx, videoName, start, end)
+    reader, err := h.storage.GetVideo(ctx, videoName, start, end)
     if err != nil {
         http.Error(w, "Error reading video", http.StatusInternalServerError)
         return
@@ -80,6 +80,7 @@ func (h *VideoHandler) StreamVideo(w http.ResponseWriter, r *http.Request) {
 
     http.ServeContent(w, r, videoName, time.Now(), seekable)
 }
+
 
 func parseRangeHeader(r *http.Request, fileSize int64) (start, end int64) {
     rangeHeader := r.Header.Get("Range")

@@ -104,6 +104,21 @@ func (s *MinioStorage) GetObject(ctx context.Context, objectName string, start, 
     return s.client.GetObject(ctx, s.rawVideosBucket, objectName, opts)
 }
 
+func (s *MinioStorage) GetVideo(ctx context.Context, objectName string, start, end int64) (io.ReadCloser, error) {
+    opts := minio.GetObjectOptions{}
+    if start > 0 || end >= 0 {
+        opts.SetRange(start, end)
+    }
+    return s.client.GetObject(ctx, s.videosBucket, objectName, opts)
+}
+func (s *MinioStorage) StatVideo(ctx context.Context, objectName string) (ObjectInfo, error) {
+    info, err := s.client.StatObject(ctx, s.videosBucket, objectName, minio.StatObjectOptions{})
+    if err != nil {
+        return ObjectInfo{}, fmt.Errorf("failed to stat video: %w", err)
+    }
+    return ObjectInfo{Size: info.Size}, nil
+}
+
 func (s *MinioStorage) StatObject(ctx context.Context, objectName string) (ObjectInfo, error) {
     info, err := s.client.StatObject(ctx, s.rawVideosBucket, objectName, minio.StatObjectOptions{})
     if err != nil {
