@@ -58,9 +58,12 @@ func (vp *VideoProcessor) Start(ctx context.Context) {
 
                 if !strings.HasSuffix(obj.Key, ".mp4") {
                     err := vp.moveToFailedBucket(ctx, obj)
+                    err = vp.db.UpdateVideoStatus(obj.Key, database.StatusFailed)
+
                     if err != nil {
                         continue
                     }
+
                     continue
                 }
 
@@ -113,10 +116,7 @@ func (vp *VideoProcessor) processVideo(ctx context.Context, obj minio.ObjectInfo
 
     tmpFile, err := os.CreateTemp("", "video-*.mp4")
     if err != nil {
-       err := vp.db.UpdateVideoStatus(obj.Key, database.StatusFailed)
-        if err != nil {
-            return fmt.Errorf("failed to update status to failed: %w", err)
-        }
+
         return fmt.Errorf("Failed to create temp file: %w", err)
     }
     tmpPath := tmpFile.Name()
@@ -125,26 +125,24 @@ func (vp *VideoProcessor) processVideo(ctx context.Context, obj minio.ObjectInfo
 
     reader, err := vp.storage.GetObject(ctx, obj.Key, 0, -1)
     if err != nil {
-         err := vp.db.UpdateVideoStatus(obj.Key, database.StatusFailed)
-         if err != nil {
-            return fmt.Errorf("failed to update status to failed: %w", err)
-         }
+
         return fmt.Errorf("failed to get object: %w", err)
     }
     defer reader.Close()
 
     _, err = io.Copy(tmpFile, reader)
     if err != nil {
-         err := vp.db.UpdateVideoStatus(obj.Key, database.StatusFailed)
-         if err != nil {
-            return fmt.Errorf("failed to update status to failed: %w", err)
-         }
+
         return fmt.Errorf("failed to write to temp file: %w", err)
     }
 
     compressedFile, err := vp.compressAndConvertVideo(tmpPath)
     if err != nil {
          err := vp.db.UpdateVideoStatus(obj.Key, database.StatusFailed)
+         moveErr := vp.moveToFailedBucket(ctx, obj)
+         if moveErr != nil {
+             fmt.Printf("Failed to move object %s to failed bucket: %v\n", obj.Key, moveErr)
+         }
          if err != nil {
             return fmt.Errorf("failed to update status to failed: %w", err)
          }
@@ -167,19 +165,13 @@ func (vp *VideoProcessor) processVideo(ctx context.Context, obj minio.ObjectInfo
         minio.PutObjectOptions{ContentType: "video/mp4"},
     )
     if err != nil {
-         err := vp.db.UpdateVideoStatus(obj.Key, database.StatusFailed)
-         if err != nil {
-            return fmt.Errorf("failed to update status to failed: %w", err)
-         }
+
         return fmt.Errorf("failed to upload video: %w", err)
     }
 
     err = vp.storage.DeleteObject(ctx, vp.storage.rawVideosBucket, obj.Key)
     if err != nil {
-         err := vp.db.UpdateVideoStatus(obj.Key, database.StatusFailed)
-         if err != nil {
-            return fmt.Errorf("failed to update status to failed: %w", err)
-         }
+
         return fmt.Errorf("failed to delete original video: %w", err)
     }
      err = vp.db.UpdateVideoStatus(obj.Key, database.StatusCompleted)
@@ -195,7 +187,7 @@ func (vp *VideoProcessor) compressAndConvertVideo(inputPath string) (string, err
     cmdArgs := []string{
         "ffmpeg", "-y", "-i", inputPath,
         "-c:v", "libx264",
-        "-preset", "medium",
+        "-preset", "fast",
         "-crf", "23",
         "-c:a", "aac",
         "-b:a", "96k",
@@ -208,6 +200,7 @@ func (vp *VideoProcessor) compressAndConvertVideo(inputPath string) (string, err
 
     err := cmd.Run()
     if err != nil {
+
         return "", fmt.Errorf("ffmpeg command fail: %w", err)
     }
 
