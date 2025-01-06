@@ -2,17 +2,23 @@ package storage
 
 import (
     "context"
-    "io"
     "fmt"
-    "time"
-    "github.com/dayquest/cdn/internal/config"
+    "io"
     "github.com/minio/minio-go/v7"
     "github.com/minio/minio-go/v7/pkg/credentials"
+    "github.com/dayquest/cdn/internal/config"
+    "time"
 )
 
 type MinioStorage struct {
-    client     *minio.Client
-    bucketName string
+    client          *minio.Client
+    videosBucket    string
+    rawVideosBucket string
+    failedBucket    string
+}
+
+type ObjectInfo struct {
+    Size int64
 }
 
 func NewMinioStorage(cfg *config.Config) (*MinioStorage, error) {
@@ -21,15 +27,29 @@ func NewMinioStorage(cfg *config.Config) (*MinioStorage, error) {
         Secure: false,
     })
     if err != nil {
-        return nil, err
+        return nil, fmt.Errorf("failed to initialize MinIO client: %w", err)
     }
-   err = ensureBucketExists(client, cfg.BucketName)
+
+    err = ensureBucketExists(client, cfg.VideosBucket)
     if err != nil {
-        return nil, fmt.Errorf("failed to ensure bucket exists: %w", err)
+        return nil, fmt.Errorf("failed to ensure VideosBucket exists: %w", err)
     }
+
+  err = ensureBucketExists(client, cfg.FailedBucket)
+    if err != nil {
+        return nil, fmt.Errorf("failed to ensure FailedBucket exists: %w", err)
+    }
+
+    err = ensureBucketExists(client, cfg.RawVideosBucket)
+    if err != nil {
+        return nil, fmt.Errorf("failed to ensure RawVideosBucket exists: %w", err)
+    }
+
     return &MinioStorage{
-        client:     client,
-        bucketName: cfg.BucketName,
+        client:         client,
+        videosBucket:   cfg.VideosBucket,
+        rawVideosBucket: cfg.RawVideosBucket,
+        failedBucket:    cfg.FailedBucket,
     }, nil
 }
 
@@ -41,37 +61,61 @@ func ensureBucketExists(client *minio.Client, bucketName string) error {
     for time.Since(startTime) < timeout {
         exists, err := client.BucketExists(context.Background(), bucketName)
         if err == nil && exists {
+            fmt.Printf("Bucket %s already exists.\n", bucketName)
             return nil
         }
-
-
 
         if err == nil && !exists {
             err = client.MakeBucket(context.Background(), bucketName, minio.MakeBucketOptions{Region: ""})
             if err == nil {
-
+                fmt.Printf("Bucket %s created successfully.\n", bucketName)
                 return nil
+            } else {
+                fmt.Printf("Failed to create bucket %s: %v. Retrying...\n", bucketName, err)
             }
-            fmt.Printf("failed to Create Bucket: %v. Retrying...\n", err)
+        } else {
+            fmt.Printf("Error checking bucket %s: %v. Retrying...\n", bucketName, err)
         }
 
         time.Sleep(retryInterval)
+        retryInterval *= 2
     }
 
-    return fmt.Errorf("no bucket %v", timeout)
+    return fmt.Errorf("failed to ensure bucket %s exists within the timeout period", bucketName)
 }
+
+func (s *MinioStorage) ListObjects(ctx context.Context, bucketName string) ([]minio.ObjectInfo, error) {
+    objects := s.client.ListObjects(ctx, bucketName, minio.ListObjectsOptions{Recursive: true})
+    var objectList []minio.ObjectInfo
+    for object := range objects {
+        if object.Err != nil {
+            return nil, fmt.Errorf("error listing objects: %v", object.Err)
+        }
+        objectList = append(objectList, object)
+    }
+    return objectList, nil
+}
+
 func (s *MinioStorage) GetObject(ctx context.Context, objectName string, start, end int64) (io.ReadCloser, error) {
     opts := minio.GetObjectOptions{}
     if start > 0 || end >= 0 {
         opts.SetRange(start, end)
     }
-    return s.client.GetObject(ctx, s.bucketName, objectName, opts)
+    return s.client.GetObject(ctx, s.rawVideosBucket, objectName, opts)
 }
 
 func (s *MinioStorage) StatObject(ctx context.Context, objectName string) (ObjectInfo, error) {
-    info, err := s.client.StatObject(ctx, s.bucketName, objectName, minio.StatObjectOptions{})
+    info, err := s.client.StatObject(ctx, s.rawVideosBucket, objectName, minio.StatObjectOptions{})
     if err != nil {
-        return ObjectInfo{}, err
+        return ObjectInfo{}, fmt.Errorf("failed to stat object: %w", err)
     }
     return ObjectInfo{Size: info.Size}, nil
+}
+
+func (s *MinioStorage) DeleteObject(ctx context.Context, bucketName, objectName string) error {
+    return s.client.RemoveObject(ctx, bucketName, objectName, minio.RemoveObjectOptions{})
+}
+
+func (s *MinioStorage) PutObject(ctx context.Context, bucketName, objectName string, reader io.Reader, objectSize int64, opts minio.PutObjectOptions) (minio.UploadInfo, error) {
+    return s.client.PutObject(ctx, bucketName, objectName, reader, objectSize, opts)
 }

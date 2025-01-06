@@ -14,6 +14,7 @@ RUN go build -o main /app/cmd/server
 FROM alpine:latest
 
 WORKDIR /root/
+RUN apk add --no-cache ffmpeg
 
 COPY --from=builder /app/main .
 

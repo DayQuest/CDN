@@ -1,9 +1,9 @@
 package handlers
 
 import (
+    "fmt"
     "io"
     "net/http"
-    "fmt"
     "strconv"
     "time"
     "github.com/dayquest/cdn/internal/config"
@@ -44,6 +44,7 @@ func NewVideoHandler(storage storage.Storage, cfg *config.Config) *VideoHandler 
         config:  cfg,
     }
 }
+
 func (h *VideoHandler) StreamVideo(w http.ResponseWriter, r *http.Request) {
     ctx := r.Context()
     videoName := mux.Vars(r)["video"]
@@ -77,14 +78,8 @@ func (h *VideoHandler) StreamVideo(w http.ResponseWriter, r *http.Request) {
         w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, obj.Size))
     }
 
- if start > 0 || end < obj.Size-1 {
-     http.ServeContent(w, r, videoName, time.Now(), seekable)
- } else {
-     http.ServeContent(w, r, videoName, time.Now(), seekable)
- }
+    http.ServeContent(w, r, videoName, time.Now(), seekable)
 }
-
-
 
 func parseRangeHeader(r *http.Request, fileSize int64) (start, end int64) {
     rangeHeader := r.Header.Get("Range")
@@ -92,11 +87,13 @@ func parseRangeHeader(r *http.Request, fileSize int64) (start, end int64) {
         return 0, fileSize - 1
     }
 
-    start = 0
-    end = fileSize - 1
-
-    if n, _ := fmt.Sscanf(rangeHeader, "bytes=%d-%d", &start, &end); n != 2 {
-        _, _ = fmt.Sscanf(rangeHeader, "bytes=%d-", &start)
+    _, err := fmt.Sscanf(rangeHeader, "bytes=%d-%d", &start, &end)
+    if err != nil {
+        _, err = fmt.Sscanf(rangeHeader, "bytes=%d-", &start)
+        if err != nil {
+            return 0, fileSize - 1
+        }
+        end = fileSize - 1
     }
 
     if start < 0 {
@@ -105,5 +102,5 @@ func parseRangeHeader(r *http.Request, fileSize int64) (start, end int64) {
     if end >= fileSize {
         end = fileSize - 1
     }
-    return
+    return start, end
 }
