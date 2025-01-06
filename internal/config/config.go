@@ -13,6 +13,7 @@ type Config struct {
     RawVideosBucket  string
     FailedBucket  string
     ServerPort       string
+    DatabaseDSN      string
 }
 
 func Load() (*Config, error) {
@@ -24,6 +25,7 @@ func Load() (*Config, error) {
         VideosBucket:     os.Getenv("VIDEOS_BUCKET"),
         RawVideosBucket:  os.Getenv("RAW_VIDEOS_BUCKET"),
         FailedBucket:     os.Getenv("FAILED_BUCKET"),
+        DatabaseDSN:      os.Getenv("DATABASE_DSN"),
     }
 
     return cfg, cfg.validate()

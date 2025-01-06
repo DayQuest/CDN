@@ -26,6 +26,7 @@ services:
       MINIO_ROOT_USER: "${MINIO_ROOT_USER}"
       MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD}"
       RAW_VIDEOS_BUCKET: "${RAW_VIDEOS_BUCKET}"
+      DATABASE_DSN: "${DATABASE_DSN}"
       VIDEOS_BUCKET: "${VIDEOS_BUCKET}"
       FAILED_BUCKET: "${FAILED_BUCKET}"
       SERVER_PORT: "${SERVER_PORT}"
@@ -41,6 +42,5 @@ volumes:
 
 networks:
   dayquest-network:
-    name: dayquest-network
     external: true
-    driver: bridge
+    name: dayquest-network

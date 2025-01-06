@@ -12,6 +12,7 @@ import (
     "github.com/dayquest/cdn/internal/config"
     "github.com/dayquest/cdn/internal/handlers"
     "github.com/dayquest/cdn/internal/storage"
+    "github.com/dayquest/cdn/internal/database"
     "github.com/gorilla/mux"
 )
 
@@ -39,10 +40,13 @@ func main() {
         ReadTimeout:  15 * time.Second,
     }
 
+
     quit := make(chan os.Signal, 1)
     signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-    processor := storage.NewVideoProcessor(storageProvider, 3)
+    database, err := database.NewDatabaseConnection(cfg.DatabaseDSN)
+
+    processor := storage.NewVideoProcessor(storageProvider, database, 3)
     ctx, cancel := context.WithCancel(context.Background())
     go processor.Start(ctx)
 
