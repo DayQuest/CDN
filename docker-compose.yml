@@ -31,6 +31,7 @@ services:
       VIDEOS_BUCKET: "${VIDEOS_BUCKET}"
       FAILED_BUCKET: "${FAILED_BUCKET}"
       SERVER_PORT: "${SERVER_PORT}"
+      THUMBNAIL_BUCKET: "${THUMBNAIL_BUCKET}"
     depends_on:
       - minio
     pull_policy: build

@@ -28,11 +28,13 @@ func main() {
     }
 
     videoHandler := handlers.NewVideoHandler(storageProvider, cfg)
+    thumbnailHandler := handlers.NewThumbnailHandler(storageProvider)
 
     r := mux.NewRouter()
 
     r.HandleFunc("/video/{video}", videoHandler.StreamVideo).Methods(http.MethodGet)
 
+    r.HandleFunc("/thumbnail/{thumbnail}", thumbnailHandler.GetThumbnail).Methods(http.MethodGet)
     srv := &http.Server{
         Handler:      r,
         Addr:         ":" + cfg.ServerPort,

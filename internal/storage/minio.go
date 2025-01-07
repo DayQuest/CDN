@@ -15,6 +15,7 @@ type MinioStorage struct {
     videosBucket    string
     rawVideosBucket string
     failedBucket    string
+    thumbnailBucket string
 }
 
 type ObjectInfo struct {
@@ -40,6 +41,12 @@ func NewMinioStorage(cfg *config.Config) (*MinioStorage, error) {
         return nil, fmt.Errorf("failed to ensure FailedBucket exists: %w", err)
     }
 
+  err = ensureBucketExists(client, cfg.ThumbnailBucket)
+    if err != nil {
+        return nil, fmt.Errorf("failed to ensure ThumbnailBucket exists: %w", err)
+    }
+
+
     err = ensureBucketExists(client, cfg.RawVideosBucket)
     if err != nil {
         return nil, fmt.Errorf("failed to ensure RawVideosBucket exists: %w", err)
@@ -50,6 +57,7 @@ func NewMinioStorage(cfg *config.Config) (*MinioStorage, error) {
         videosBucket:   cfg.VideosBucket,
         rawVideosBucket: cfg.RawVideosBucket,
         failedBucket:    cfg.FailedBucket,
+        thumbnailBucket:    cfg.ThumbnailBucket,
     }, nil
 }
 
@@ -118,6 +126,26 @@ func (s *MinioStorage) StatVideo(ctx context.Context, objectName string) (Object
     }
     return ObjectInfo{Size: info.Size}, nil
 }
+
+
+
+func (s *MinioStorage) GetThumbnail(ctx context.Context, objectName string, start, end int64) (io.ReadCloser, error) {
+    opts := minio.GetObjectOptions{}
+    if start >= 0 && end >= 0 {
+        opts.SetRange(start, end)
+    }
+    return s.client.GetObject(ctx, s.thumbnailBucket, objectName, opts)
+}
+
+func (s *MinioStorage) StatThumbnail(ctx context.Context, objectName string) (ObjectInfo, error) {
+    info, err := s.client.StatObject(ctx, s.thumbnailBucket, objectName, minio.StatObjectOptions{})
+    if err != nil {
+        return ObjectInfo{}, fmt.Errorf("failed to stat thumbnail: %w", err)
+    }
+    return ObjectInfo{Size: info.Size}, nil
+}
+
+
 
 func (s *MinioStorage) StatObject(ctx context.Context, objectName string) (ObjectInfo, error) {
     info, err := s.client.StatObject(ctx, s.rawVideosBucket, objectName, minio.StatObjectOptions{})

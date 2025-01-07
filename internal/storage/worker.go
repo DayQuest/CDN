@@ -1,21 +1,22 @@
 package storage
 
 import (
-    "context"
     "fmt"
     "io"
     "os"
     "os/exec"
+    "path/filepath"
     "strings"
     "sync"
     "time"
+    "context"
     "github.com/minio/minio-go/v7"
     "github.com/dayquest/cdn/internal/database"
 )
 
 type VideoProcessor struct {
     storage        *MinioStorage
-    db            *database.DBHandler
+    db             *database.DBHandler
     processedFiles sync.Map
     workerCount    int
 }
@@ -116,7 +117,6 @@ func (vp *VideoProcessor) processVideo(ctx context.Context, obj minio.ObjectInfo
 
     tmpFile, err := os.CreateTemp("", "video-*.mp4")
     if err != nil {
-
         return fmt.Errorf("Failed to create temp file: %w", err)
     }
     tmpPath := tmpFile.Name()
@@ -125,27 +125,25 @@ func (vp *VideoProcessor) processVideo(ctx context.Context, obj minio.ObjectInfo
 
     reader, err := vp.storage.GetObject(ctx, obj.Key, 0, -1)
     if err != nil {
-
         return fmt.Errorf("failed to get object: %w", err)
     }
     defer reader.Close()
 
     _, err = io.Copy(tmpFile, reader)
     if err != nil {
-
         return fmt.Errorf("failed to write to temp file: %w", err)
     }
 
     compressedFile, err := vp.compressAndConvertVideo(tmpPath)
     if err != nil {
-         err := vp.db.UpdateVideoStatus(obj.Key, database.StatusFailed)
-         moveErr := vp.moveToFailedBucket(ctx, obj)
-         if moveErr != nil {
-             fmt.Printf("Failed to move object %s to failed bucket: %v\n", obj.Key, moveErr)
-         }
-         if err != nil {
+        err := vp.db.UpdateVideoStatus(obj.Key, database.StatusFailed)
+        moveErr := vp.moveToFailedBucket(ctx, obj)
+        if moveErr != nil {
+            fmt.Printf("Failed to move object %s to failed bucket: %v\n", obj.Key, moveErr)
+        }
+        if err != nil {
             return fmt.Errorf("failed to update status to failed: %w", err)
-         }
+        }
         return fmt.Errorf("failed to compress and convert video: %w", err)
     }
     defer os.Remove(compressedFile)
@@ -165,19 +163,29 @@ func (vp *VideoProcessor) processVideo(ctx context.Context, obj minio.ObjectInfo
         minio.PutObjectOptions{ContentType: "video/mp4"},
     )
     if err != nil {
-
         return fmt.Errorf("failed to upload video: %w", err)
     }
 
     err = vp.storage.DeleteObject(ctx, vp.storage.rawVideosBucket, obj.Key)
     if err != nil {
-
         return fmt.Errorf("failed to delete original video: %w", err)
     }
-     err = vp.db.UpdateVideoStatus(obj.Key, database.StatusCompleted)
-     if err != nil {
+
+    thumbnailPath, err := vp.createThumbnail(tmpPath)
+    if err != nil {
+        return fmt.Errorf("failed to create thumbnail: %w", err)
+    }
+
+    err = vp.uploadThumbnail(ctx, thumbnailPath, obj.Key)
+    if err != nil {
+        return fmt.Errorf("failed to upload thumbnail: %w", err)
+    }
+
+    err = vp.db.UpdateVideoStatus(obj.Key, database.StatusCompleted)
+    if err != nil {
         return fmt.Errorf("failed to update status to completed: %w", err)
-     }
+    }
+
     return nil
 }
 
@@ -200,12 +208,54 @@ func (vp *VideoProcessor) compressAndConvertVideo(inputPath string) (string, err
 
     err := cmd.Run()
     if err != nil {
-
         return "", fmt.Errorf("ffmpeg command fail: %w", err)
     }
 
     return outputPath, nil
 }
+
+func (vp *VideoProcessor) createThumbnail(videoPath string) (string, error) {
+    thumbnailPath := fmt.Sprintf("%s.jpg", videoPath)
+
+    cmdArgs := []string{
+        "ffmpeg", "-y", "-i", videoPath,
+        "-vf", "thumbnail",
+        "-frames:v", "1",
+        thumbnailPath,
+    }
+
+    cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
+    err := cmd.Run()
+    if err != nil {
+        return "", fmt.Errorf("failed to extract thumbnail: %w", err)
+    }
+
+    return thumbnailPath, nil
+}
+func (vp *VideoProcessor) uploadThumbnail(ctx context.Context, thumbnailPath, videoKey string) error {
+    thumbnailFile, err := os.Open(thumbnailPath)
+    if err != nil {
+        return fmt.Errorf("failed to open thumbnail file: %w", err)
+    }
+    defer thumbnailFile.Close()
+
+    thumbnailKey := fmt.Sprintf("%s.jpg", strings.TrimSuffix(filepath.Base(videoKey), filepath.Ext(videoKey)))
+
+    _, err = vp.storage.PutObject(
+        ctx,
+        vp.storage.thumbnailBucket,
+        thumbnailKey,
+        thumbnailFile,
+        -1,
+        minio.PutObjectOptions{ContentType: "image/jpeg"},
+    )
+    if err != nil {
+        return fmt.Errorf("failed to upload thumbnail to bucket: %w", err)
+    }
+
+    return nil
+}
+
 
 func (vp *VideoProcessor) moveToFailedBucket(ctx context.Context, obj minio.ObjectInfo) error {
     reader, err := vp.storage.GetObject(ctx, obj.Key, 0, -1)
@@ -233,4 +283,3 @@ func (vp *VideoProcessor) moveToFailedBucket(ctx context.Context, obj minio.Obje
 
     return nil
 }
-
