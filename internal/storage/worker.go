@@ -208,7 +208,9 @@ func (vp *VideoProcessor) compressAndConvertVideo(inputPath string) (string, err
 }
 
 func (vp *VideoProcessor) createThumbnail(videoPath string) (string, error) {
-    thumbnailPath := fmt.Sprintf("%s.jpg", videoPath)
+    videoBasePath := strings.TrimSuffix(videoPath, ".mp4")
+
+    thumbnailPath := fmt.Sprintf("%s.jpg", videoBasePath)
 
     cmdArgs := []string{
         "ffmpeg", "-y", "-i", videoPath,
@@ -219,12 +221,15 @@ func (vp *VideoProcessor) createThumbnail(videoPath string) (string, error) {
 
     cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
     err := cmd.Run()
+
     if err != nil {
-        return "", fmt.Errorf("failed to extract thumbnail: %w", err)
+        fmt.Printf("Warning: failed to extract thumbnail for %s, error: %v\n", videoPath, err)
+        return vp.getFallbackThumbnailPath(), nil
     }
 
     return thumbnailPath, nil
 }
+
 func (vp *VideoProcessor) uploadThumbnail(ctx context.Context, thumbnailPath, videoKey string) error {
     thumbnailFile, err := os.Open(thumbnailPath)
     if err != nil {
