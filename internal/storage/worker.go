@@ -222,10 +222,6 @@ func (vp *VideoProcessor) createThumbnail(videoPath string) (string, error) {
     cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
     err := cmd.Run()
 
-    if err != nil {
-        fmt.Printf("Warning: failed to extract thumbnail for %s, error: %v\n", videoPath, err)
-        return vp.getFallbackThumbnailPath(), nil
-    }
 
     return thumbnailPath, nil
 }
