@@ -57,16 +57,7 @@ func (vp *VideoProcessor) Start(ctx context.Context) {
                     continue
                 }
 
-                if !strings.HasSuffix(obj.Key, ".mp4") {
-                    err := vp.moveToFailedBucket(ctx, obj)
-                    err = vp.db.UpdateVideoStatus(obj.Key, database.StatusFailed)
 
-                    if err != nil {
-                        continue
-                    }
-
-                    continue
-                }
 
                 select {
                 case workChan <- obj:
