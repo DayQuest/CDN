@@ -98,9 +98,7 @@ func (vp *VideoProcessor) processWorker(ctx context.Context, wg *sync.WaitGroup,
         }
     }
 }
-
 func (vp *VideoProcessor) processVideo(ctx context.Context, obj minio.ObjectInfo) error {
-
     err := vp.db.UpdateVideoStatus(obj.Key, database.StatusProcessing)
     if err != nil {
         return fmt.Errorf("failed to update status to processing: %w", err)
@@ -108,7 +106,6 @@ func (vp *VideoProcessor) processVideo(ctx context.Context, obj minio.ObjectInfo
     ext := filepath.Ext(obj.Key)
 
     tmpFile, err := os.CreateTemp("", fmt.Sprintf("video-*.%s", ext))
-
     if err != nil {
         return fmt.Errorf("Failed to create temp file: %w", err)
     }
@@ -141,6 +138,12 @@ func (vp *VideoProcessor) processVideo(ctx context.Context, obj minio.ObjectInfo
     }
     defer os.Remove(compressedFile)
 
+    thumbnailPath, err := vp.createThumbnail(compressedFile)
+    if err != nil {
+        return fmt.Errorf("failed to create thumbnail: %w", err)
+    }
+    defer os.Remove(thumbnailPath)
+
     compressedFileReader, err := os.Open(compressedFile)
     if err != nil {
         return fmt.Errorf("failed to open compressed file: %w", err)
@@ -162,11 +165,6 @@ func (vp *VideoProcessor) processVideo(ctx context.Context, obj minio.ObjectInfo
     err = vp.storage.DeleteObject(ctx, vp.storage.rawVideosBucket, obj.Key)
     if err != nil {
         return fmt.Errorf("failed to delete original video: %w", err)
-    }
-
-    thumbnailPath, err := vp.createThumbnail(tmpPath)
-    if err != nil {
-        return fmt.Errorf("failed to create thumbnail: %w", err)
     }
 
     err = vp.uploadThumbnail(ctx, thumbnailPath, obj.Key)
@@ -208,22 +206,19 @@ func (vp *VideoProcessor) compressAndConvertVideo(inputPath string) (string, err
 }
 
 func (vp *VideoProcessor) createThumbnail(videoPath string) (string, error) {
-    videoBasePath := strings.TrimSuffix(videoPath, ".mp4")
-
-    thumbnailPath := fmt.Sprintf("%s.jpg", videoBasePath)
+    thumbnailPath := fmt.Sprintf("%s-thumb.jpg", strings.TrimSuffix(videoPath, filepath.Ext(videoPath)))
 
     cmdArgs := []string{
         "ffmpeg", "-y", "-i", videoPath,
-        "-vf", "thumbnail",
+        "-vf", "thumbnail,scale=480:-1",
         "-frames:v", "1",
         thumbnailPath,
     }
 
     cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
     err := cmd.Run()
-
     if err != nil {
-        fmt.Printf("Warning: failed to extract thumbnail for %s, error: %v\n", videoPath, err)
+        return "", fmt.Errorf("failed to extract thumbnail: %w", err)
     }
 
     return thumbnailPath, nil
