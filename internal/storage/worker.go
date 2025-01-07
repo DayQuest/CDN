@@ -103,9 +103,8 @@ func (vp *VideoProcessor) processVideo(ctx context.Context, obj minio.ObjectInfo
     if err != nil {
         return fmt.Errorf("failed to update status to processing: %w", err)
     }
-    ext := filepath.Ext(obj.Key)
 
-    tmpFile, err := os.CreateTemp("", fmt.Sprintf("video-*.%s", ext))
+    tmpFile, err := os.CreateTemp("", fmt.Sprintf("video-*.%s", "mp4"))
     if err != nil {
         return fmt.Errorf("Failed to create temp file: %w", err)
     }
