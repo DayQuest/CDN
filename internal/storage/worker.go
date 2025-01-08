@@ -57,7 +57,7 @@ func (vp *VideoProcessor) Start(ctx context.Context) {
                     continue
                 }
 
-
+                
 
                 select {
                 case workChan <- obj:
@@ -105,10 +105,8 @@ func (vp *VideoProcessor) processVideo(ctx context.Context, obj minio.ObjectInfo
     if err != nil {
         return fmt.Errorf("failed to update status to processing: %w", err)
     }
-    ext := filepath.Ext(obj.Key)
 
-    tmpFile, err := os.CreateTemp("", fmt.Sprintf("video-*.%s", ext))
-
+    tmpFile, err := os.CreateTemp("", "video-*.mp4")
     if err != nil {
         return fmt.Errorf("Failed to create temp file: %w", err)
     }
@@ -208,9 +206,7 @@ func (vp *VideoProcessor) compressAndConvertVideo(inputPath string) (string, err
 }
 
 func (vp *VideoProcessor) createThumbnail(videoPath string) (string, error) {
-    videoBasePath := strings.TrimSuffix(videoPath, ".mp4")
-
-    thumbnailPath := fmt.Sprintf("%s.jpg", videoBasePath)
+    thumbnailPath := fmt.Sprintf("%s.jpg", videoPath)
 
     cmdArgs := []string{
         "ffmpeg", "-y", "-i", videoPath,
@@ -221,14 +217,12 @@ func (vp *VideoProcessor) createThumbnail(videoPath string) (string, error) {
 
     cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
     err := cmd.Run()
-
     if err != nil {
-        fmt.Printf("Warning: failed to extract thumbnail for %s, error: %v\n", videoPath, err)
+        return "", fmt.Errorf("failed to extract thumbnail: %w", err)
     }
 
     return thumbnailPath, nil
 }
-
 func (vp *VideoProcessor) uploadThumbnail(ctx context.Context, thumbnailPath, videoKey string) error {
     thumbnailFile, err := os.Open(thumbnailPath)
     if err != nil {
