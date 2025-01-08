@@ -57,7 +57,7 @@ func (vp *VideoProcessor) Start(ctx context.Context) {
                     continue
                 }
 
-                
+
 
                 select {
                 case workChan <- obj:
@@ -107,7 +107,7 @@ func (vp *VideoProcessor) processVideo(ctx context.Context, obj minio.ObjectInfo
     }
 
     tmpFile, err := os.CreateTemp("", "video-*.mp4")
-    if err != nil {
+     if err != nil {
         return fmt.Errorf("Failed to create temp file: %w", err)
     }
     tmpPath := tmpFile.Name()
@@ -206,7 +206,9 @@ func (vp *VideoProcessor) compressAndConvertVideo(inputPath string) (string, err
 }
 
 func (vp *VideoProcessor) createThumbnail(videoPath string) (string, error) {
-    thumbnailPath := fmt.Sprintf("%s.jpg", videoPath)
+    videoBasePath := strings.TrimSuffix(videoPath, ".mp4")
+
+    thumbnailPath := fmt.Sprintf("%s.jpg", videoBasePath)
 
     cmdArgs := []string{
         "ffmpeg", "-y", "-i", videoPath,
