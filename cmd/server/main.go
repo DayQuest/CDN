@@ -27,14 +27,19 @@ func main() {
         log.Fatalf("failed to intialize storage: %v", err)
     }
 
+    db, err := database.NewDatabaseConnection(cfg.DatabaseDSN)
+    if err != nil {
+        log.Fatalf("failed to connect to database: %v", err)
+    }
+    defer db.Close()
+
     videoHandler := handlers.NewVideoHandler(storageProvider, cfg)
     thumbnailHandler := handlers.NewThumbnailHandler(storageProvider)
 
     r := mux.NewRouter()
-
     r.HandleFunc("/video/{video}", videoHandler.StreamVideo).Methods(http.MethodGet)
-
     r.HandleFunc("/thumbnail/{thumbnail}", thumbnailHandler.GetThumbnail).Methods(http.MethodGet)
+
     srv := &http.Server{
         Handler:      r,
         Addr:         ":" + cfg.ServerPort,
@@ -42,13 +47,10 @@ func main() {
         ReadTimeout:  15 * time.Second,
     }
 
-
     quit := make(chan os.Signal, 1)
     signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-    database, err := database.NewDatabaseConnection(cfg.DatabaseDSN)
-
-    processor := storage.NewVideoProcessor(storageProvider, database, 3)
+    processor := storage.NewVideoProcessor(storageProvider, db, 3)
     ctx, cancel := context.WithCancel(context.Background())
     go processor.Start(ctx)
 
