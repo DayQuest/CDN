@@ -10,8 +10,8 @@ import (
     "strings"
     "time"
     "compress/gzip"
-    "dayquest/cdn/internal/config"
-    "dayquest/cdn/internal/storage"
+    "github.com/dayquest/cdn/internal/config"
+    "github.com/dayquest/cdn/internal/storage"
     "github.com/gorilla/mux"
 )
 

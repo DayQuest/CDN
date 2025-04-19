@@ -1,4 +1,4 @@
-module dayquest/cdn
+module github.com/dayquest/cdn
 
 go 1.21
 
