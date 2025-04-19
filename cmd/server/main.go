@@ -19,24 +19,26 @@ import (
 func main() {
     cfg, err := config.Load()
     if err != nil {
-        log.Fatalf("failed to load config: %v", err)
+        log.Fatalf("Failed to load config: %v", err)
     }
 
-    storageProvider, err := storage.NewMinioStorage(cfg)
-    if err != nil {
-        log.Fatalf("failed to intialize storage: %v", err)
-    }
-
+    // Initialize database connection
     db, err := database.NewDatabaseConnection(cfg.DatabaseDSN)
     if err != nil {
-        log.Fatalf("failed to connect to database: %v", err)
+        log.Fatalf("Failed to connect to database: %v", err)
     }
     defer db.Close()
 
-    videoHandler := handlers.NewVideoHandler(storageProvider, cfg)
-    thumbnailHandler := handlers.NewThumbnailHandler(storageProvider)
+    // Initialize storage
+    storageProvider, err := storage.NewMinioStorage(cfg)
+    if err != nil {
+        log.Fatalf("Failed to initialize storage: %v", err)
+    }
 
+    // Initialize router and handlers
     r := mux.NewRouter()
+    videoHandler := handlers.NewVideoHandler(storageProvider, cfg, db)
+    thumbnailHandler := handlers.NewThumbnailHandler(storageProvider)
     r.HandleFunc("/video/{video}", videoHandler.StreamVideo).Methods(http.MethodGet)
     r.HandleFunc("/thumbnail/{thumbnail}", thumbnailHandler.GetThumbnail).Methods(http.MethodGet)
 

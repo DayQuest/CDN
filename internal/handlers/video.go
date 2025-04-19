@@ -12,12 +12,14 @@ import (
     "compress/gzip"
     "github.com/dayquest/cdn/internal/config"
     "github.com/dayquest/cdn/internal/storage"
+    "github.com/dayquest/cdn/internal/database"
     "github.com/gorilla/mux"
 )
 
 type VideoHandler struct {
     storage storage.Storage
     config  *config.Config
+    db      *database.DBHandler
 }
 
 type seekableReadCloser struct {
@@ -42,16 +44,41 @@ func (s *seekableReadCloser) Seek(offset int64, whence int) (int64, error) {
     return s.offset, nil
 }
 
-func NewVideoHandler(storage storage.Storage, cfg *config.Config) *VideoHandler {
+func NewVideoHandler(storage storage.Storage, cfg *config.Config, db *database.DBHandler) *VideoHandler {
     return &VideoHandler{
         storage: storage,
         config:  cfg,
+        db:      db,
     }
 }
 
 func (h *VideoHandler) StreamVideo(w http.ResponseWriter, r *http.Request) {
     ctx := r.Context()
     videoName := mux.Vars(r)["video"]
+
+    // Check video processing status
+    status, err := h.db.GetVideoStatus(videoName)
+    if err != nil {
+        http.Error(w, "Error checking video status", http.StatusInternalServerError)
+        return
+    }
+
+    switch status {
+    case database.StatusPending:
+        http.Error(w, "Video is pending processing", http.StatusAccepted)
+        return
+    case database.StatusProcessing:
+        http.Error(w, "Video is currently being processed", http.StatusAccepted)
+        return
+    case database.StatusFailed:
+        http.Error(w, "Video processing failed", http.StatusUnprocessableEntity)
+        return
+    case database.StatusUnknown:
+        http.Error(w, "Video not found", http.StatusNotFound)
+        return
+    case database.StatusCompleted:
+        // Continue with video streaming
+    }
 
     // Get video info
     obj, err := h.storage.StatVideo(ctx, videoName)
