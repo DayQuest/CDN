@@ -200,6 +200,12 @@ func (h *VideoHandler) StreamVideo(w http.ResponseWriter, r *http.Request) {
 
 		w.Header().Set("Content-Type", contentType)
 
+		// Get file stats first to set Content-Length
+		info, err := h.storage.StatVideo(ctx, videoName)
+		if err == nil {
+			w.Header().Set("Content-Length", strconv.FormatInt(info.Size, 10))
+		}
+
 		// Enable compression for HLS manifests only
 		if strings.HasSuffix(videoName, ".m3u8") && strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
 			w.Header().Set("Content-Encoding", "gzip")
@@ -207,15 +213,6 @@ func (h *VideoHandler) StreamVideo(w http.ResponseWriter, r *http.Request) {
 			defer gz.Close()
 			io.Copy(gz, reader)
 			return
-		}
-
-		// For TS segments, always set Content-Length
-		if strings.HasSuffix(videoName, ".ts") {
-			// Get the size of the content
-			tsInfo, err := h.storage.StatObject(ctx, videoName)
-			if err == nil {
-				w.Header().Set("Content-Length", strconv.FormatInt(tsInfo.Size, 10))
-			}
 		}
 
 		io.Copy(w, reader)
