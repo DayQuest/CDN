@@ -209,10 +209,13 @@ func (h *VideoHandler) StreamVideo(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// For TS segments, use chunked transfer
+		// For TS segments, always set Content-Length
 		if strings.HasSuffix(videoName, ".ts") {
-			w.Header().Del("Content-Length")
-			w.Header().Set("Transfer-Encoding", "chunked")
+			// Get the size of the content
+			tsInfo, err := h.storage.StatObject(ctx, videoName)
+			if err == nil {
+				w.Header().Set("Content-Length", strconv.FormatInt(tsInfo.Size, 10))
+			}
 		}
 
 		io.Copy(w, reader)
@@ -241,14 +244,10 @@ func (h *VideoHandler) StreamVideo(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Accept-Ranges", "bytes")
-
-	// Enable chunked transfer for video streaming
-	if start == 0 && end == obj.Size-1 {
-		w.Header().Del("Content-Length")
-		w.Header().Set("Transfer-Encoding", "chunked")
-	} else {
-		w.Header().Set("Content-Length", strconv.FormatInt(end-start+1, 10))
-	}
+	
+	// Always set Content-Length header for video files
+	contentLength := end - start + 1
+	w.Header().Set("Content-Length", strconv.FormatInt(contentLength, 10))
 
 	if start > 0 || end < obj.Size-1 {
 		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, obj.Size))
