@@ -1,79 +1,106 @@
 package main
 
 import (
-    "context"
-    "log"
-    "net/http"
-    "os"
-    "os/signal"
-    "syscall"
-    "time"
+	"context"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
-    "github.com/dayquest/cdn/internal/config"
-    "github.com/dayquest/cdn/internal/handlers"
-    "github.com/dayquest/cdn/internal/storage"
-    "github.com/dayquest/cdn/internal/database"
-    "github.com/gorilla/mux"
+	"github.com/dayquest/cdn/internal/config"
+	"github.com/dayquest/cdn/internal/database"
+	"github.com/dayquest/cdn/internal/handlers"
+	"github.com/dayquest/cdn/internal/storage"
+	"github.com/gorilla/mux"
 )
 
 func main() {
-    cfg, err := config.Load()
-    if err != nil {
-        log.Fatalf("Failed to load config: %v", err)
-    }
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
 
-    // Initialize database connection
-    db, err := database.NewDatabaseConnection(cfg.DatabaseDSN)
-    if err != nil {
-        log.Fatalf("Failed to connect to database: %v", err)
-    }
-    defer db.Close()
+	// Initialize database connection
+	db, err := database.NewDatabaseConnection(cfg.DatabaseDSN)
+	if err != nil {
+		log.Fatalf("Failed to connect to database: %v", err)
+	}
+	defer db.Close()
 
-    // Initialize storage
-    storageProvider, err := storage.NewMinioStorage(cfg)
-    if err != nil {
-        log.Fatalf("Failed to initialize storage: %v", err)
-    }
+	// Initialize storage
+	storageClient, err := storage.NewMinioStorage(cfg)
+	if err != nil {
+		log.Fatalf("Failed to initialize storage: %v", err)
+	}
 
-    // Initialize router and handlers
-    r := mux.NewRouter()
-    videoHandler := handlers.NewVideoHandler(storageProvider, cfg, db)
-    thumbnailHandler := handlers.NewThumbnailHandler(storageProvider)
-    r.HandleFunc("/video/{video}", videoHandler.StreamVideo).Methods(http.MethodGet)
-    r.HandleFunc("/thumbnail/{thumbnail}", thumbnailHandler.GetThumbnail).Methods(http.MethodGet)
+	// Initialize router and handlers
+	router := mux.NewRouter()
+	
+	// Add ping handler for connection testing
+	pingHandler := handlers.NewPingHandler()
+	router.HandleFunc("/ping", pingHandler.HandlePing).Methods("GET")
+	router.HandleFunc("/ping-test.json", pingHandler.ServeTestFile).Methods("GET")
+	
+	// API routes for video metadata
+	api := router.PathPrefix("/api").Subrouter()
+	videoHandler := handlers.NewVideoHandler(storageClient, cfg, db)
+	api.HandleFunc("/videos/{video}", videoHandler.GetVideoMetadata).Methods("GET")
 
-    srv := &http.Server{
-        Handler:      r,
-        Addr:         ":" + cfg.ServerPort,
-        WriteTimeout: 15 * time.Second,
-        ReadTimeout:  15 * time.Second,
-    }
+	// CDN routes for video streaming
+	cdn := router.PathPrefix("/video").Subrouter()
+	cdn.HandleFunc("/{video}", videoHandler.StreamVideo).Methods("GET")
+	thumbnailHandler := handlers.NewThumbnailHandler(storageClient)
+	cdn.HandleFunc("/thumbnail/{thumbnail}", thumbnailHandler.GetThumbnail).Methods("GET")
 
-    quit := make(chan os.Signal, 1)
-    signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	// Configure CORS
+	router.Use(mux.CORSMethodMiddleware(router))
+	router.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+			if r.Method == "OPTIONS" {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
 
-    processor := storage.NewVideoProcessor(storageProvider, db, 3)
-    ctx, cancel := context.WithCancel(context.Background())
-    go processor.Start(ctx)
+	srv := &http.Server{
+		Handler:      router,
+		Addr:         ":" + cfg.ServerPort,
+		WriteTimeout: 15 * time.Second,
+		ReadTimeout:  15 * time.Second,
+	}
 
-    log.Printf("Server starting on %s with Minio storage", ":"+cfg.ServerPort)
-    log.Printf("Videos Bucket: %s Raw Videos Bucket: %s", cfg.VideosBucket, cfg.RawVideosBucket)
-    log.Printf("Video processor started monitoring %s bucket", cfg.RawVideosBucket)
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
-    go func() {
-        if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-            log.Fatalf("Server Failed: %v", err)
-        }
-    }()
+	processor := storage.NewVideoProcessor(storageClient, db, 3)
+	ctx, cancel := context.WithCancel(context.Background())
+	go processor.Start(ctx)
 
-    <-quit
-    log.Println("Shutting down Server and Video processor...")
+	log.Printf("Server starting on %s with Minio storage", ":"+cfg.ServerPort)
+	log.Printf("Videos Bucket: %s Raw Videos Bucket: %s", cfg.VideosBucket, cfg.RawVideosBucket)
+	log.Printf("Video processor started monitoring %s bucket", cfg.RawVideosBucket)
 
-    cancel()
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server Failed: %v", err)
+		}
+	}()
 
-    if err := srv.Shutdown(context.Background()); err != nil {
-        log.Fatalf("server shutdown failed: %v", err)
-    }
+	<-quit
+	log.Println("Shutting down Server and Video processor...")
 
-    log.Println("server and video processor stopped successfully.")
+	cancel()
+
+	if err := srv.Shutdown(context.Background()); err != nil {
+		log.Fatalf("server shutdown failed: %v", err)
+	}
+
+	log.Println("server and video processor stopped successfully.")
 }
