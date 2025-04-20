@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,7 +10,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/dayquest/cdn/internal/config"
 	"github.com/dayquest/cdn/internal/database"
@@ -57,9 +55,35 @@ func NewVideoHandler(storage storage.Storage, cfg *config.Config, db *database.D
 
 func (h *VideoHandler) GetVideoMetadata(w http.ResponseWriter, r *http.Request) {
 	videoName := mux.Vars(r)["video"]
+	
+	// Handle .temp file requests
+	isTemp := strings.HasSuffix(videoName, ".temp")
+	if isTemp {
+		baseVideoName := strings.TrimSuffix(videoName, ".temp")
+		if strings.HasSuffix(baseVideoName, ".mp4") {
+			// Check if the mp4 exists
+			obj, err := h.storage.StatVideo(r.Context(), baseVideoName)
+			if err == nil {
+				// Return metadata for the mp4 file
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"status":  "completed",
+					"message": "Video is ready",
+					"data": map[string]interface{}{
+						"size":        obj.Size,
+						"contentType": "video/mp4",
+						"filePath":    baseVideoName,
+						"cdnUrl":      fmt.Sprintf("/video/%s", baseVideoName),
+					},
+				})
+				return
+			}
+		}
+	}
 
 	// Check video processing status
-	status, err := h.db.GetVideoStatus(videoName)
+	videoID := strings.TrimSuffix(strings.TrimSuffix(videoName, ".temp"), ".mp4")
+	status, err := h.db.GetVideoStatus(videoID)
 	if err != nil {
 		log.Printf("Error checking video status: %v", err)
 		w.Header().Set("Content-Type", "application/json")
@@ -139,15 +163,82 @@ func (h *VideoHandler) StreamVideo(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	videoName := mux.Vars(r)["video"]
 
+	// Check if this is a .temp file request
+	isTemp := strings.HasSuffix(videoName, ".temp")
+	if isTemp {
+		baseVideoName := strings.TrimSuffix(videoName, ".temp")
+		
+		// First check if the processed mp4 exists
+		if strings.HasSuffix(baseVideoName, ".mp4") {
+			_, err := h.storage.StatVideo(ctx, baseVideoName)
+			if err == nil {
+				// Redirect to the mp4 file
+				http.Redirect(w, r, "/video/"+baseVideoName, http.StatusTemporaryRedirect)
+				return
+			}
+		}
+
+		// Check if the file exists in the raw videos bucket
+		rawVideoName := strings.TrimSuffix(baseVideoName, ".mp4")
+		status, err := h.db.GetVideoStatus(rawVideoName)
+		if err == nil {
+			switch status {
+			case database.StatusPending, database.StatusProcessing:
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusAccepted)
+				json.NewEncoder(w).Encode(map[string]string{
+					"status": "processing",
+					"message": "Video is being processed",
+					"videoId": rawVideoName,
+				})
+				return
+			case database.StatusFailed:
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				json.NewEncoder(w).Encode(map[string]string{
+					"status": "failed",
+					"message": "Video processing failed",
+					"videoId": rawVideoName,
+				})
+				return
+			}
+		}
+
+		// If we get here, the video doesn't exist in either bucket
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{
+			"status": "not_found",
+			"message": "Video not found or upload incomplete",
+			"videoId": rawVideoName,
+		})
+		return
+	}
+
 	// Get video info
 	obj, err := h.storage.StatVideo(ctx, videoName)
 	if err != nil {
+		// If the original request was for a .temp file and we got here,
+		// it means neither the .temp nor the .mp4 exists
+		if isTemp {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]string{
+				"status": "not_found",
+				"message": "Video not found or still processing",
+			})
+			return
+		}
 		log.Printf("Error getting video info: %v", err)
 		http.Error(w, "Video not found", http.StatusNotFound)
 		return
 	}
 
-	// Determine content type
+	// Set essential headers first
+	w.Header().Set("Accept-Ranges", "bytes")
+	w.Header().Set("Content-Length", strconv.FormatInt(obj.Size, 10))
+
+	// Determine and set content type
 	contentType := obj.ContentType
 	if contentType == "" {
 		ext := strings.ToLower(filepath.Ext(videoName))
@@ -158,6 +249,14 @@ func (h *VideoHandler) StreamVideo(w http.ResponseWriter, r *http.Request) {
 			contentType = "application/vnd.apple.mpegurl"
 		case ".ts":
 			contentType = "video/MP2T"
+		case ".temp":
+			// For .temp files, check the base file extension
+			baseExt := strings.ToLower(filepath.Ext(strings.TrimSuffix(videoName, ".temp")))
+			if baseExt == ".mp4" {
+				contentType = "video/mp4"
+			} else {
+				contentType = "application/octet-stream"
+			}
 		default:
 			contentType = mime.TypeByExtension(ext)
 			if contentType == "" {
@@ -165,65 +264,30 @@ func (h *VideoHandler) StreamVideo(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	w.Header().Set("Content-Type", contentType)
 
-	// Set optimized Cache-Control headers based on content type
-	cacheControl := "public, max-age=31536000, immutable" // 1 year for static content
-
-	// Check if client specifically requests caching with cache=true parameter
-	if r.URL.Query().Get("cache") == "true" {
-		// Extended caching for explicitly cacheable requests
-		cacheControl = "public, max-age=604800, immutable" // 1 week
-	} else if r.URL.Query().Get("nocache") != "" {
-		// No caching for testing requests with nocache parameter
-		cacheControl = "no-store, no-cache, must-revalidate, max-age=0"
-	} else if strings.HasSuffix(videoName, ".m3u8") {
-		cacheControl = "public, max-age=1, must-revalidate" // Short cache for HLS manifests
-	} else if strings.HasSuffix(videoName, ".ts") {
-		cacheControl = "public, max-age=604800, immutable" // 1 week for HLS segments
-	}
-
-	// Add custom CDN caching header if requested
-	if r.Header.Get("X-CDN-Cache-Control") == "true" {
-		w.Header().Set("X-CDN-Cache", "true")
-	}
-
-	w.Header().Set("Cache-Control", cacheControl)
-
-	// Handle HLS content
-	if strings.HasSuffix(videoName, ".m3u8") || strings.HasSuffix(videoName, ".ts") {
-		reader, err := h.storage.GetHLSContent(ctx, videoName)
-		if err != nil {
-			http.Error(w, "Error reading HLS content", http.StatusInternalServerError)
-			return
-		}
-		defer reader.Close()
-
-		w.Header().Set("Content-Type", contentType)
-
-		// Get file stats first to set Content-Length
-		info, err := h.storage.StatVideo(ctx, videoName)
-		if err == nil {
-			w.Header().Set("Content-Length", strconv.FormatInt(info.Size, 10))
-		}
-
-		// Enable compression for HLS manifests only
-		if strings.HasSuffix(videoName, ".m3u8") && strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
-			w.Header().Set("Content-Encoding", "gzip")
-			gz := gzip.NewWriter(w)
-			defer gz.Close()
-			io.Copy(gz, reader)
-			return
-		}
-
-		io.Copy(w, reader)
-		return
-	}
-
-	// Handle video streaming
+	// Handle range request for video streaming
 	start, end := parseRangeHeader(r, obj.Size)
 	if start >= obj.Size {
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", obj.Size))
 		http.Error(w, "Requested range not satisfiable", http.StatusRequestedRangeNotSatisfiable)
 		return
+	}
+
+	// Set content length for the actual range being served
+	rangeSize := end - start + 1
+	w.Header().Set("Content-Length", strconv.FormatInt(rangeSize, 10))
+
+	// For MP4 files, ensure we have all required headers for iOS
+	if strings.HasSuffix(strings.ToLower(videoName), ".mp4") {
+		w.Header().Set("Content-Type", "video/mp4")
+		if start > 0 || end < obj.Size-1 {
+			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, obj.Size))
+			w.WriteHeader(http.StatusPartialContent)
+		}
+	} else if start > 0 || end < obj.Size-1 {
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, obj.Size))
+		w.WriteHeader(http.StatusPartialContent)
 	}
 
 	reader, err := h.storage.GetVideo(ctx, videoName, start, end)
@@ -233,25 +297,12 @@ func (h *VideoHandler) StreamVideo(w http.ResponseWriter, r *http.Request) {
 	}
 	defer reader.Close()
 
-	seekable := &seekableReadCloser{
-		ReadCloser: reader,
-		size:       obj.Size,
-		offset:     start,
+	// Use larger buffer for better streaming performance
+	buffer := make([]byte, 256*1024) // 256KB buffer
+	_, err = io.CopyBuffer(w, reader, buffer)
+	if err != nil {
+		log.Printf("Error streaming video: %v", err)
 	}
-
-	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Accept-Ranges", "bytes")
-	
-	// Always set Content-Length header for video files
-	contentLength := end - start + 1
-	w.Header().Set("Content-Length", strconv.FormatInt(contentLength, 10))
-
-	if start > 0 || end < obj.Size-1 {
-		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, obj.Size))
-		w.WriteHeader(http.StatusPartialContent)
-	}
-
-	http.ServeContent(w, r, videoName, time.Now(), seekable)
 }
 
 func parseRangeHeader(r *http.Request, fileSize int64) (start, end int64) {

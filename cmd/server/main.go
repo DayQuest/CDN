@@ -74,11 +74,17 @@ func main() {
 	})
 
 	srv := &http.Server{
-		Handler:      router,
-		Addr:         ":" + cfg.ServerPort,
-		WriteTimeout: 15 * time.Second,
-		ReadTimeout:  15 * time.Second,
+		Handler:           router,
+		Addr:             ":" + cfg.ServerPort,
+		WriteTimeout:      30 * time.Second,  // Increased for large video chunks
+		ReadTimeout:      30 * time.Second,
+		IdleTimeout:      120 * time.Second,  // Keep connections alive longer
+		ReadHeaderTimeout: 10 * time.Second,
+		MaxHeaderBytes:    1 << 20,          // 1MB header size limit
 	}
+
+	// Enable TCP keep-alive
+	srv.SetKeepAlivesEnabled(true)
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
