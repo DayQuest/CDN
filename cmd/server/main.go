@@ -37,12 +37,12 @@ func main() {
 
 	// Initialize router and handlers
 	router := mux.NewRouter()
-	
+
 	// Add ping handler for connection testing
 	pingHandler := handlers.NewPingHandler()
 	router.HandleFunc("/ping", pingHandler.HandlePing).Methods("GET")
 	router.HandleFunc("/ping-test.json", pingHandler.ServeTestFile).Methods("GET")
-	
+
 	// API routes for video metadata
 	api := router.PathPrefix("/api").Subrouter()
 	videoHandler := handlers.NewVideoHandler(storageClient, cfg, db)
@@ -53,6 +53,10 @@ func main() {
 	cdn.HandleFunc("/{video}", videoHandler.StreamVideo).Methods("GET")
 	thumbnailHandler := handlers.NewThumbnailHandler(storageClient)
 	cdn.HandleFunc("/thumbnail/{thumbnail}", thumbnailHandler.GetThumbnail).Methods("GET")
+
+	// CDN routes for profile pictures
+	profileHandler := handlers.NewProfileHandler(storageClient)
+	router.HandleFunc("/profile-pictures/{username}", profileHandler.GetProfileImage).Methods("GET")
 
 	// Configure CORS
 	router.Use(mux.CORSMethodMiddleware(router))

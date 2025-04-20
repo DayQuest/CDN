@@ -1,0 +1,13 @@
+{
+    "version": "0.2",
+    "language": "en",
+    "words": [
+        "dayquest",
+        "Subrouter",
+        "minio"
+    ],
+    "ignorePaths": [
+        "node_modules/**",
+        "vendor/**"
+    ]
+} 

@@ -139,6 +139,16 @@ func (h *VideoHandler) StreamVideo(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	videoName := mux.Vars(r)["video"]
 
+	// Detect client type for optimized delivery
+	userAgent := r.Header.Get("User-Agent")
+	isApp := strings.Contains(userAgent, "DayQuest-App") || strings.Contains(userAgent, "Flutter")
+
+	// Add debug logging for performance analysis
+	requestStart := time.Now()
+	defer func() {
+		log.Printf("Video request: %s, app: %v, took: %vms", videoName, isApp, time.Since(requestStart).Milliseconds())
+	}()
+
 	// Get video info
 	obj, err := h.storage.StatVideo(ctx, videoName)
 	if err != nil {
@@ -166,30 +176,52 @@ func (h *VideoHandler) StreamVideo(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Set optimized Cache-Control headers based on content type
-	cacheControl := "public, max-age=31536000, immutable" // 1 year for static content
-	
-	// Check if client specifically requests caching with cache=true parameter
-	if r.URL.Query().Get("cache") == "true" {
-		// Extended caching for explicitly cacheable requests
-		cacheControl = "public, max-age=604800, immutable" // 1 week
-	} else if r.URL.Query().Get("nocache") != "" {
-		// No caching for testing requests with nocache parameter
-		cacheControl = "no-store, no-cache, must-revalidate, max-age=0"
-	} else if strings.HasSuffix(videoName, ".m3u8") {
-		cacheControl = "public, max-age=1, must-revalidate" // Short cache for HLS manifests
-	} else if strings.HasSuffix(videoName, ".ts") {
-		cacheControl = "public, max-age=604800, immutable" // 1 week for HLS segments
-	}
-	
-	// Add custom CDN caching header if requested
-	if r.Header.Get("X-CDN-Cache-Control") == "true" {
-		w.Header().Set("X-CDN-Cache", "true")
-	}
-	
-	w.Header().Set("Cache-Control", cacheControl)
+	// Optimize cache settings based on client type and content
+	var cacheControl string
 
-	// Handle HLS content
+	// App-specific optimizations
+	if isApp {
+		// Longer cache for apps, which handle their own refresh policy
+		cacheControl = "public, max-age=604800, immutable" // 1 week
+		w.Header().Set("X-CDN-Cache", "true")
+		w.Header().Set("X-App-Optimized", "true")
+	} else if r.URL.Query().Get("cache") == "true" {
+		// Explicit caching requested
+		cacheControl = "public, max-age=604800, immutable" // 1 week
+		w.Header().Set("X-CDN-Cache", "true")
+	} else if r.URL.Query().Get("nocache") != "" {
+		// No caching requested
+		cacheControl = "no-store, no-cache, must-revalidate, max-age=0"
+		w.Header().Set("X-CDN-Cache", "false")
+	} else if strings.HasSuffix(videoName, ".m3u8") {
+		// HLS manifests need frequent refreshing
+		cacheControl = "public, max-age=10, must-revalidate"
+	} else if strings.HasSuffix(videoName, ".ts") {
+		// HLS segments are immutable
+		cacheControl = "public, max-age=604800, immutable"
+	} else {
+		// Default for other static content
+		cacheControl = "public, max-age=31536000, immutable" // 1 year
+	}
+
+	// Set response headers for performance
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", cacheControl)
+	w.Header().Set("Accept-Ranges", "bytes")
+	w.Header().Set("Connection", "keep-alive")
+
+	// Set expires header for better caching
+	if !strings.Contains(cacheControl, "no-cache") {
+		expiryDuration := 24 * time.Hour // Default 1 day
+		if strings.Contains(cacheControl, "max-age=604800") {
+			expiryDuration = 7 * 24 * time.Hour // 1 week
+		} else if strings.Contains(cacheControl, "max-age=31536000") {
+			expiryDuration = 365 * 24 * time.Hour // 1 year
+		}
+		w.Header().Set("Expires", time.Now().Add(expiryDuration).Format(time.RFC1123))
+	}
+
+	// Handle HLS content with compression for manifests
 	if strings.HasSuffix(videoName, ".m3u8") || strings.HasSuffix(videoName, ".ts") {
 		reader, err := h.storage.GetHLSContent(ctx, videoName)
 		if err != nil {
@@ -198,9 +230,7 @@ func (h *VideoHandler) StreamVideo(w http.ResponseWriter, r *http.Request) {
 		}
 		defer reader.Close()
 
-		w.Header().Set("Content-Type", contentType)
-
-		// Enable compression for HLS manifests only
+		// Apply compression for manifest files
 		if strings.HasSuffix(videoName, ".m3u8") && strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
 			w.Header().Set("Content-Encoding", "gzip")
 			gz := gzip.NewWriter(w)
@@ -209,7 +239,7 @@ func (h *VideoHandler) StreamVideo(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// For TS segments, use chunked transfer
+		// Optimize transfer for TS segments
 		if strings.HasSuffix(videoName, ".ts") {
 			w.Header().Del("Content-Length")
 			w.Header().Set("Transfer-Encoding", "chunked")
@@ -219,11 +249,33 @@ func (h *VideoHandler) StreamVideo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Handle video streaming
+	// Handle video streaming with optimized chunk sizes for mobile
+	rangeHeader := r.Header.Get("Range")
 	start, end := parseRangeHeader(r, obj.Size)
+
+	// App-specific range optimizations
+	if isApp && rangeHeader != "" {
+		log.Printf("App range request: %s bytes=%d-%d", videoName, start, end)
+
+		// For mobile apps, we use smaller chunks to improve initial load time
+		// but only if the requested range is large
+		maxChunkSize := int64(2 * 1024 * 1024) // 2MB for mobile
+		if end-start > maxChunkSize {
+			// Mobile devices do better with smaller chunks
+			end = start + maxChunkSize
+			log.Printf("Optimized range for app: bytes=%d-%d", start, end)
+		}
+	}
+
+	// Validate range
 	if start >= obj.Size {
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", obj.Size))
 		http.Error(w, "Requested range not satisfiable", http.StatusRequestedRangeNotSatisfiable)
 		return
+	}
+
+	if end >= obj.Size {
+		end = obj.Size - 1
 	}
 
 	reader, err := h.storage.GetVideo(ctx, videoName, start, end)
@@ -239,22 +291,16 @@ func (h *VideoHandler) StreamVideo(w http.ResponseWriter, r *http.Request) {
 		offset:     start,
 	}
 
-	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Accept-Ranges", "bytes")
-
-	// Enable chunked transfer for video streaming
-	if start == 0 && end == obj.Size-1 {
-		w.Header().Del("Content-Length")
-		w.Header().Set("Transfer-Encoding", "chunked")
-	} else {
-		w.Header().Set("Content-Length", strconv.FormatInt(end-start+1, 10))
-	}
+	// Set content length and range headers
+	contentLength := end - start + 1
+	w.Header().Set("Content-Length", strconv.FormatInt(contentLength, 10))
 
 	if start > 0 || end < obj.Size-1 {
 		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, obj.Size))
 		w.WriteHeader(http.StatusPartialContent)
 	}
 
+	// Use efficient serving method with proper cache control
 	http.ServeContent(w, r, videoName, time.Now(), seekable)
 }
 
