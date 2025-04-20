@@ -29,7 +29,7 @@ func Load() (*Config, error) {
 		FailedBucket:       os.Getenv("FAILED_BUCKET"),
 		DatabaseDSN:        os.Getenv("DATABASE_DSN"),
 		ThumbnailBucket:    os.Getenv("THUMBNAIL_BUCKET"),
-		ProfileImageBucket: os.Getenv("PROFILE_IMAGE_BUCKET"),
+		ProfileImageBucket: "profile-images",
 	}
 
 	return cfg, cfg.validate()
@@ -42,7 +42,7 @@ func (c *Config) validate() error {
 
 	if c.MinioEndpoint == "" || c.MinioRootUser == "" ||
 		c.MinioRootPassword == "" || c.VideosBucket == "" ||
-		c.RawVideosBucket == "" || c.ProfileImageBucket == "" {
+		c.RawVideosBucket == "" {
 		return fmt.Errorf("missing required Minio configuration")
 	}
 
