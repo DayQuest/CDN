@@ -51,8 +51,10 @@ func main() {
 	// CDN routes for video streaming
 	cdn := router.PathPrefix("/video").Subrouter()
 	cdn.HandleFunc("/{video}", videoHandler.StreamVideo).Methods("GET")
-	thumbnailHandler := handlers.NewThumbnailHandler(storageClient)
-	cdn.HandleFunc("/thumbnail/{thumbnail}", thumbnailHandler.GetThumbnail).Methods("GET")
+
+	thumbnailPathSubrouter := router.PathPrefix("/thumbnail").Subrouter()
+	thumbnailHandlerInstance := handlers.NewThumbnailHandler(storageClient)
+	thumbnailPathSubrouter.HandleFunc("/{thumbnail}", thumbnailHandlerInstance.GetThumbnail).Methods("GET")
 
 	// CDN routes for profile pictures
 	profileHandler := handlers.NewProfileHandler(storageClient)
