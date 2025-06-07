@@ -144,7 +144,6 @@ func (h *VideoHandler) GetVideoMetadata(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Return video metadata
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":  "completed",
@@ -249,4 +248,28 @@ func (h *VideoHandler) streamVideoFile(w http.ResponseWriter, r *http.Request, v
 	if err != nil {
 		log.Printf("Error streaming video: %v", err)
 	}
+}
+
+func parseRangeHeader(r *http.Request, fileSize int64) (start, end int64) {
+	rangeHeader := r.Header.Get("Range")
+	if rangeHeader == "" {
+		return 0, fileSize - 1
+	}
+
+	_, err := fmt.Sscanf(rangeHeader, "bytes=%d-%d", &start, &end)
+	if err != nil {
+		_, err = fmt.Sscanf(rangeHeader, "bytes=%d-", &start)
+		if err != nil {
+			return 0, fileSize - 1
+		}
+		end = fileSize - 1
+	}
+
+	if start < 0 {
+		start = 0
+	}
+	if end >= fileSize {
+		end = fileSize - 1
+	}
+	return start, end
 }
