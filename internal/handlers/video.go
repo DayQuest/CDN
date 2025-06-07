@@ -56,33 +56,34 @@ func NewVideoHandler(storage storage.Storage, cfg *config.Config, db *database.D
 func (h *VideoHandler) GetVideoMetadata(w http.ResponseWriter, r *http.Request) {
 	videoName := mux.Vars(r)["video"]
 	
-	// Handle .temp file requests
-	isTemp := strings.HasSuffix(videoName, ".temp")
-	if isTemp {
-		baseVideoName := strings.TrimSuffix(videoName, ".temp")
-		if strings.HasSuffix(baseVideoName, ".mp4") {
-			// Check if the mp4 exists
-			obj, err := h.storage.StatVideo(r.Context(), baseVideoName)
-			if err == nil {
-				// Return metadata for the mp4 file
-				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"status":  "completed",
-					"message": "Video is ready",
-					"data": map[string]interface{}{
-						"size":        obj.Size,
-						"contentType": "video/mp4",
-						"filePath":    baseVideoName,
-						"cdnUrl":      fmt.Sprintf("/video/%s", baseVideoName),
-					},
-				})
-				return
-			}
+	if strings.HasSuffix(videoName, ".temp") {
+		obj, err := h.storage.StatVideo(r.Context(), videoName)
+		if err != nil {
+			log.Printf("Error getting temp video info: %v", err)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]string{
+				"status":  "not_found",
+				"message": "Video not found",
+			})
+			return
 		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":  "completed",
+			"message": "Video is ready",
+			"data": map[string]interface{}{
+				"size":        obj.Size,
+				"contentType": "video/mp4", 
+				"filePath":    videoName,
+				"cdnUrl":      fmt.Sprintf("/video/%s", videoName),
+			},
+		})
+		return
 	}
 
-	// Check video processing status
-	videoID := strings.TrimSuffix(strings.TrimSuffix(videoName, ".temp"), ".mp4")
+	videoID := strings.TrimSuffix(videoName, ".mp4")
 	status, err := h.db.GetVideoStatus(videoID)
 	if err != nil {
 		log.Printf("Error checking video status: %v", err)
@@ -129,10 +130,8 @@ func (h *VideoHandler) GetVideoMetadata(w http.ResponseWriter, r *http.Request) 
 		})
 		return
 	case database.StatusCompleted:
-		// Continue with video info
 	}
 
-	// Get video info
 	obj, err := h.storage.StatVideo(r.Context(), videoName)
 	if err != nil {
 		log.Printf("Error getting video info: %v", err)
@@ -163,100 +162,51 @@ func (h *VideoHandler) StreamVideo(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	videoName := mux.Vars(r)["video"]
 
-	// Check if this is a .temp file request
-	isTemp := strings.HasSuffix(videoName, ".temp")
-	if isTemp {
-		baseVideoName := strings.TrimSuffix(videoName, ".temp")
-		
-		// First check if the processed mp4 exists
-		if strings.HasSuffix(baseVideoName, ".mp4") {
-			_, err := h.storage.StatVideo(ctx, baseVideoName)
-			if err == nil {
-				// Redirect to the mp4 file
-				http.Redirect(w, r, "/video/"+baseVideoName, http.StatusTemporaryRedirect)
-				return
-			}
-		}
-
-		// Check if the file exists in the raw videos bucket
-		rawVideoName := strings.TrimSuffix(baseVideoName, ".mp4")
-		status, err := h.db.GetVideoStatus(rawVideoName)
-		if err == nil {
-			switch status {
-			case database.StatusPending, database.StatusProcessing:
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusAccepted)
-				json.NewEncoder(w).Encode(map[string]string{
-					"status": "processing",
-					"message": "Video is being processed",
-					"videoId": rawVideoName,
-				})
-				return
-			case database.StatusFailed:
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusUnprocessableEntity)
-				json.NewEncoder(w).Encode(map[string]string{
-					"status": "failed",
-					"message": "Video processing failed",
-					"videoId": rawVideoName,
-				})
-				return
-			}
-		}
-
-		// If we get here, the video doesn't exist in either bucket
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]string{
-			"status": "not_found",
-			"message": "Video not found or upload incomplete",
-			"videoId": rawVideoName,
-		})
-		return
-	}
-
-	// Get video info
-	obj, err := h.storage.StatVideo(ctx, videoName)
-	if err != nil {
-		// If the original request was for a .temp file and we got here,
-		// it means neither the .temp nor the .mp4 exists
-		if isTemp {
+	if strings.HasSuffix(videoName, ".temp") {
+		obj, err := h.storage.StatVideo(ctx, videoName)
+		if err != nil {
+			log.Printf("Error getting temp video info: %v", err)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusNotFound)
 			json.NewEncoder(w).Encode(map[string]string{
-				"status": "not_found",
-				"message": "Video not found or still processing",
+				"status":  "not_found",
+				"message": "Video not found",
 			})
 			return
 		}
+
+		h.streamVideoFile(w, r, videoName, obj)
+		return
+	}
+
+	obj, err := h.storage.StatVideo(ctx, videoName)
+	if err != nil {
 		log.Printf("Error getting video info: %v", err)
 		http.Error(w, "Video not found", http.StatusNotFound)
 		return
 	}
 
-	// Set essential headers first
+	h.streamVideoFile(w, r, videoName, obj)
+}
+
+func (h *VideoHandler) streamVideoFile(w http.ResponseWriter, r *http.Request, videoName string, obj *storage.VideoInfo) {
+	ctx := r.Context()
+
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("Content-Length", strconv.FormatInt(obj.Size, 10))
 
-	// Determine and set content type
 	contentType := obj.ContentType
 	if contentType == "" {
 		ext := strings.ToLower(filepath.Ext(videoName))
 		switch ext {
 		case ".mp4":
 			contentType = "video/mp4"
+		case ".temp":
+			contentType = "video/mp4"
 		case ".m3u8":
 			contentType = "application/vnd.apple.mpegurl"
 		case ".ts":
 			contentType = "video/MP2T"
-		case ".temp":
-			// For .temp files, check the base file extension
-			baseExt := strings.ToLower(filepath.Ext(strings.TrimSuffix(videoName, ".temp")))
-			if baseExt == ".mp4" {
-				contentType = "video/mp4"
-			} else {
-				contentType = "application/octet-stream"
-			}
 		default:
 			contentType = mime.TypeByExtension(ext)
 			if contentType == "" {
@@ -266,7 +216,6 @@ func (h *VideoHandler) StreamVideo(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", contentType)
 
-	// Handle range request for video streaming
 	start, end := parseRangeHeader(r, obj.Size)
 	if start >= obj.Size {
 		w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", obj.Size))
@@ -274,12 +223,10 @@ func (h *VideoHandler) StreamVideo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set content length for the actual range being served
 	rangeSize := end - start + 1
 	w.Header().Set("Content-Length", strconv.FormatInt(rangeSize, 10))
 
-	// For MP4 files, ensure we have all required headers for iOS
-	if strings.HasSuffix(strings.ToLower(videoName), ".mp4") {
+	if strings.HasSuffix(strings.ToLower(videoName), ".mp4") || strings.HasSuffix(strings.ToLower(videoName), ".temp") {
 		w.Header().Set("Content-Type", "video/mp4")
 		if start > 0 || end < obj.Size-1 {
 			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, obj.Size))
@@ -297,34 +244,9 @@ func (h *VideoHandler) StreamVideo(w http.ResponseWriter, r *http.Request) {
 	}
 	defer reader.Close()
 
-	// Use larger buffer for better streaming performance
-	buffer := make([]byte, 256*1024) // 256KB buffer
+	buffer := make([]byte, 256*1024) 
 	_, err = io.CopyBuffer(w, reader, buffer)
 	if err != nil {
 		log.Printf("Error streaming video: %v", err)
 	}
-}
-
-func parseRangeHeader(r *http.Request, fileSize int64) (start, end int64) {
-	rangeHeader := r.Header.Get("Range")
-	if rangeHeader == "" {
-		return 0, fileSize - 1
-	}
-
-	_, err := fmt.Sscanf(rangeHeader, "bytes=%d-%d", &start, &end)
-	if err != nil {
-		_, err = fmt.Sscanf(rangeHeader, "bytes=%d-", &start)
-		if err != nil {
-			return 0, fileSize - 1
-		}
-		end = fileSize - 1
-	}
-
-	if start < 0 {
-		start = 0
-	}
-	if end >= fileSize {
-		end = fileSize - 1
-	}
-	return start, end
 }
