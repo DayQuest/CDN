@@ -188,7 +188,7 @@ func (h *VideoHandler) StreamVideo(w http.ResponseWriter, r *http.Request) {
 	h.streamVideoFile(w, r, videoName, obj)
 }
 
-func (h *VideoHandler) streamVideoFile(w http.ResponseWriter, r *http.Request, videoName string, obj *storage.VideoInfo) {
+func (h *VideoHandler) streamVideoFile(w http.ResponseWriter, r *http.Request, videoName string, obj storage.ObjectInfo) {
 	ctx := r.Context()
 
 	w.Header().Set("Accept-Ranges", "bytes")
@@ -220,6 +220,7 @@ func (h *VideoHandler) streamVideoFile(w http.ResponseWriter, r *http.Request, v
 		http.Error(w, "Requested range not satisfiable", http.StatusRequestedRangeNotSatisfiable)
 		return
 	}
+
 	rangeSize := end - start + 1
 	w.Header().Set("Content-Length", strconv.FormatInt(rangeSize, 10))
 
